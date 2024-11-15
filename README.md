@@ -1,10 +1,3 @@
-# README
+## Salesforce Connect Adapter for GraphQL on AWS—Partner Solution
 
-A repo containing all the basic file templates and general guidelines for any open source project at Salesforce.
-
-## Usage
-
-It's required that all files must be placed at the top level of your repository.
-
-> **NOTE** Your README should contain detailed, useful information about the project!
-
+For architectural details, step-by-step instructions, and customization options, see the [blog post](https://aws.amazon.com/blogs/apn/how-to-resolve-customer-issues-faster-with-salesforce-connect-and-amazon-rds-integration/).
