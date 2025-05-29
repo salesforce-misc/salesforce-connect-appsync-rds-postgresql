@@ -128,9 +128,9 @@ Parameters:
   AutoPauseCluster:
     Type: String
     AllowedValues:
-      - 'true'
-      - 'false'
-    Default: 'true'
+      - "true"
+      - "false"
+    Default: "true"
     Description: Do you want the serverless cluster to scale the capacity to 0 ACUs when cluster is idle?
 
   SecondsUntilAutoPause:
@@ -177,7 +177,7 @@ Parameters:
     Default: 16
     Description: >
       The maximum capacity for an Aurora DB cluster in serverless DB engine mode. 
-      This value should be greater than or equal to MinCapacity. 
+      This value should be greater than or equal to MinCapacity.
 
   DatabaseUserName:
     Description: Database user name
@@ -205,7 +205,8 @@ Parameters:
       ID of the private subnet in Availability Zone 2 of your existing VPC
       (example: subnet-be8b01ea).
   AvailabilityZones:
-    Description: List of Availability Zones to use for the subnets in the VPC. Only
+    Description:
+      List of Availability Zones to use for the subnets in the VPC. Only
       two Availability Zones are used for this deployment, and the logical order of
       your selections is preserved.
     Type: List<AWS::EC2::AvailabilityZone::Name>
@@ -332,11 +333,15 @@ Mappings:
       "SnapStart": "false"
 
 Conditions:
-  EnableSnapStart: !Equals [ !FindInMap [ SnapStartRegionMap, !Ref "AWS::Region", SnapStart ], "true" ]
+  EnableSnapStart:
+    !Equals [
+      !FindInMap [SnapStartRegionMap, !Ref "AWS::Region", SnapStart],
+      "true",
+    ]
   CreateServerlessCluster: !Equals [!Ref RDSClusterMode, "Serverless"]
-  CreateStandardCluster: !Equals [ !Ref RDSClusterMode, "Standard" ]
+  CreateStandardCluster: !Equals [!Ref RDSClusterMode, "Standard"]
   AutoPauseClusterCondition: !Equals [!Ref AutoPauseCluster, "true"]
-  UsingDefaultBucket: !Equals [!Ref QSS3BucketName, 'aws-ia']
+  UsingDefaultBucket: !Equals [!Ref QSS3BucketName, "aws-ia"]
 
 Resources:
   AppSyncLambdaRole:
@@ -377,11 +382,9 @@ Resources:
       Runtime: java11
       MemorySize: 512
       Timeout: 120
-      SnapStart:
-        !If
+      SnapStart: !If
         - EnableSnapStart
-        -
-          ApplyOn: PublishedVersions
+        - ApplyOn: PublishedVersions
         - !Ref "AWS::NoValue"
       Role: !Ref RDSResolverLambdaRole
       Code:
@@ -400,6 +403,18 @@ Resources:
       FunctionName: !GetAtt RDSResolverLambda.Arn
       Description: v1
 
+  ServerlessRDSInstance:
+    Type: AWS::RDS::DBInstance
+    Condition: CreateServerlessCluster
+    Properties:
+      DBClusterIdentifier: !Ref ServerlessRDSCluster
+      DBInstanceClass: db.serverless
+      Engine: aurora-postgresql
+      PubliclyAccessible: false
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      DBParameterGroupName: !Ref ServerlessRDSDBParameterGroup
+      AvailabilityZone: !Select [ 0, !Ref AvailabilityZones ]
+
   RDSWaitHandle:
     Condition: CreateStandardCluster
     DependsOn: RDSDBInstance1
@@ -407,7 +422,7 @@ Resources:
 
   ServerlessRDSWaitHandle:
     Condition: CreateServerlessCluster
-    DependsOn: ServerlessRDSCluster
+    DependsOn: ServerlessRDSInstance
     Type: "AWS::CloudFormation::WaitConditionHandle"
 
   RDSWaitCondition:
@@ -440,7 +455,6 @@ Resources:
       Timeout: "1"
       Count: 0
 
-
   CodeBuildProject:
     Type: AWS::CodeBuild::Project
     DeletionPolicy: Retain
@@ -459,31 +473,51 @@ Resources:
         Type: NO_SOURCE
         BuildSpec: |
           version: 0.2
+
           phases:
+            install:
+              commands:
+                - echo 'Updating OS and enabling PostgreSQL 12…'
+                - sudo yum update -y
+                - sudo amazon-linux-extras enable postgresql12
+                - sudo yum clean metadata
+                - sudo yum install -y postgresql jq autoconf readline-devel zlib-devel gcc jemalloc-devel openssl-devel tcl tcl-devel clang wget
+
             pre_build:
               commands:
-                - echo `ls -altr`
-                - echo `pwd`
+                - echo 'Fetching DB credentials from Secrets Manager…'
+                - export DBUSER=$(aws secretsmanager get-secret-value --secret-id $SECRET_NAME --region $AWS_DEFAULT_REGION --query 'SecretString' --output text | jq -r '.username')
+                - export DBPASSWORD=$(aws secretsmanager get-secret-value --secret-id $SECRET_NAME --region $AWS_DEFAULT_REGION --query 'SecretString' --output text | jq -r '.password')
+                - export HOST=$(aws secretsmanager get-secret-value --secret-id $SECRET_NAME --region $AWS_DEFAULT_REGION --query 'SecretString' --output text | jq -r '.host')
+                - export PORT=$(aws secretsmanager get-secret-value --secret-id $SECRET_NAME --region $AWS_DEFAULT_REGION --query 'SecretString' --output text | jq -r '.port')
+                - export DB=$(aws secretsmanager get-secret-value --secret-id $SECRET_NAME --region $AWS_DEFAULT_REGION --query 'SecretString' --output text | jq -r '.dbname')
+                - export PGPASSWORD=$DBPASSWORD
+                - echo 'Workspace:'
+                - ls -altr
+                - pwd
+
             build:
               commands:
-                - echo Build started on `date`
-                - echo Downloading $GRAPHQL_SCHEMA_NAME and copying to artifacts bucket...          
-                - wget $GRAPHQL_SCHEMA_LOCATION
+                - echo "Build started on $(date)"
+                # --- GraphQL Schema ---
+                - echo "Downloading GraphQL schema and copying to artifacts bucket…"
+                - wget -O $GRAPHQL_SCHEMA_NAME $GRAPHQL_SCHEMA_LOCATION
                 - ls -lrt
                 - aws s3 cp $GRAPHQL_SCHEMA_NAME s3://$ARTIFACTS_BUCKET_LOCATION/
 
-                - echo Building resolver source code...          
+                # --- Resolver Build ---
+                - echo "Building resolver source code…"
                 - aws s3 sync s3://$QS_S3_BUCKET_NAME/$QS_S3_KEY_PREFIX resolver-build
                 - cd resolver-build/resolver
                 - ls -lrt
                 - mvn package -Dmaven.test.skip
                 - ls -lrt
-                - echo Copying $GRAPHQL_RESOLVER_NAME to artifacts bucket...          
+                - echo "Copying $GRAPHQL_RESOLVER_NAME to artifacts bucket…"
                 - aws s3 cp target/$GRAPHQL_RESOLVER_NAME s3://$ARTIFACTS_BUCKET_LOCATION/
+                - cd ../../
 
-                - sudo yum update -y
-                - sudo yum install -y autoconf readline-devel zlib-devel jq
-                - sudo yum install -y gcc jemalloc-devel openssl-devel tcl tcl-devel clang wget
+                # --- PostgreSQL Local Client (optional if psql is needed from source) ---
+                - echo "Installing PostgreSQL 12.5 client from source…"
                 - wget https://ftp.postgresql.org/pub/source/v12.5/postgresql-12.5.tar.gz
                 - tar -xzf postgresql-12.5.tar.gz
                 - cd postgresql-12.5
@@ -491,20 +525,21 @@ Resources:
                 - ./configure
                 - make -j 4 all
                 - sudo make install
-                - wget $SCHEMA_DDL_LOCATION
-                - export DBUSER=`aws secretsmanager get-secret-value  --secret-id $SECRET_NAME --region $AWS_DEFAULT_REGION --query 'SecretString' --output text | jq -r '."username"'`
-                - export PORT=`aws secretsmanager get-secret-value  --secret-id $SECRET_NAME --region $AWS_DEFAULT_REGION --query 'SecretString' --output text | jq -r '."port"'` 
-                - export DB=`aws secretsmanager get-secret-value  --secret-id $SECRET_NAME --region $AWS_DEFAULT_REGION --query 'SecretString' --output text | jq -r '."dbname"'`
-                - export HOST=`aws secretsmanager get-secret-value  --secret-id $SECRET_NAME --region $AWS_DEFAULT_REGION --query 'SecretString' --output text | jq -r '."host"'`
-                - export DBPASSWORD=`aws secretsmanager get-secret-value  --secret-id $SECRET_NAME --region $AWS_DEFAULT_REGION --query 'SecretString' --output text | jq -r '."password"'`
-                - export PGPASSWORD=$DBPASSWORD
-                - cat $SCHEMA_DDL_NAME | psql -h$HOST -p $PORT -U$DBUSER -d $DB 
+                - cd ..
+
+                # --- DDL & Aurora Setup ---
+                - echo "Downloading and applying schema DDL…"
+                - wget -O $SCHEMA_DDL_NAME $SCHEMA_DDL_LOCATION
+                - cat $SCHEMA_DDL_NAME | psql -h $HOST -p $PORT -U $DBUSER -d $DB
+
             post_build:
               commands:
-                - echo Build completed on `date`
+                - echo "Build completed on $(date)"
+
           artifacts:
             files:
               - build.json
+
       Environment:
         ComputeType: BUILD_GENERAL1_MEDIUM
         Image: aws/codebuild/amazonlinux2-x86_64-standard:3.0
@@ -653,8 +688,6 @@ Resources:
               requests.put(event['ResponseURL'], data=json.dumps(responseBody))
       Description: This AWS Lambda Function kicks off a code build job.
 
-
-
   RDSCluster:
     Type: "AWS::RDS::DBCluster"
     Condition: CreateStandardCluster
@@ -677,7 +710,7 @@ Resources:
     Condition: CreateStandardCluster
     Properties:
       Description: "Aurora Cluster Parameter Group"
-      Family: aurora-postgresql13
+      Family: aurora-postgresql16
       Parameters:
         rds.logical_replication: 1
         wal_sender_timeout: 0
@@ -699,7 +732,7 @@ Resources:
     Condition: CreateStandardCluster
     Properties:
       Description: Aurora Parameter Group
-      Family: aurora-postgresql13
+      Family: aurora-postgresql16
 
   DBSubnetGroup:
     Type: AWS::RDS::DBSubnetGroup
@@ -717,45 +750,43 @@ Resources:
       TargetType: AWS::RDS::DBInstance
 
   ServerlessRDSCluster:
-    Type: "AWS::RDS::DBCluster"
+    Type: AWS::RDS::DBCluster
     Condition: CreateServerlessCluster
     Properties:
-      DBClusterParameterGroupName: !Ref ServerlessRDSDBClusterParameterGroup
-      DBSubnetGroupName: !Ref DBSubnetGroup
       Engine: aurora-postgresql
-      EngineMode: serverless
-      EngineVersion: 11.13
-      EnableHttpEndpoint: true
-      MasterUserPassword: !Sub "{{resolve:secretsmanager:${RDSSecret}::password}}"
-      MasterUsername: !Ref DatabaseUserName
+      EngineMode: provisioned           
+      ServerlessV2ScalingConfiguration: 
+        MinCapacity: !Ref MinCapacity   
+        MaxCapacity: !Ref MaxCapacity
+      EnableHttpEndpoint: true          
+      DBClusterParameterGroupName: !Ref ServerlessRDSDBClusterParameterGroup
+      DBSubnetGroupName:        !Ref DBSubnetGroup
       DatabaseName: !Ref DatabaseName
       Port: !Ref DatabasePort
-      ScalingConfiguration:
-        AutoPause: !If
-          - AutoPauseClusterCondition
-          - true
-          - false
-        SecondsUntilAutoPause: !If
-          - AutoPauseClusterCondition
-          - !Ref SecondsUntilAutoPause
-          - !Ref AWS::NoValue
-        MaxCapacity: !Ref MaxCapacity
-        MinCapacity: !Ref MinCapacity
-      StorageEncrypted: true
-      VpcSecurityGroupIds: [!Ref RDSSecurityGroup]
+      MasterUsername:          !Ref DatabaseUserName
+      MasterUserPassword:      !Sub "{{resolve:secretsmanager:${RDSSecret}::password}}"
+      StorageEncrypted:        true
+      VpcSecurityGroupIds:     [ !Ref RDSSecurityGroup ]
       Tags:
         - Key: Name
-          Value: graphql-rds-serverless-cluster
+          Value: graphql-rds-serverless-v2-cluster
 
   ServerlessRDSDBClusterParameterGroup:
-    Type: "AWS::RDS::DBClusterParameterGroup"
+    Type: AWS::RDS::DBClusterParameterGroup
     Condition: CreateServerlessCluster
     Properties:
-      Description: "Aurora Serverless Cluster Parameter Group"
-      Family: aurora-postgresql11
+      Family:      aurora-postgresql16   # same as provisioned
+      Description: "Aurora Serverless v2 parameter group"
       Parameters:
         rds.logical_replication: 1
-        wal_sender_timeout: 0
+        wal_sender_timeout:      0
+
+  ServerlessRDSDBParameterGroup:
+    Type: AWS::RDS::DBParameterGroup
+    Condition: CreateServerlessCluster
+    Properties:
+      Description: Aurora Serverless Parameter Group
+      Family: aurora-postgresql16
 
   SMServerlessRDSAttachment:
     Type: AWS::SecretsManager::SecretTargetAttachment
