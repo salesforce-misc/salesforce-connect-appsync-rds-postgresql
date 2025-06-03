@@ -18,9 +18,9 @@ type Graphqlsample_MyOrder implements Node {
 }
 
 type Graphqlsample_MyOrderItem implements Node {
-  ParentOrder: ID!
+  
   ParentOrderId: ID!
-  ParentProduct: ID!
+  
   ParentProductId: ID!
   Quantity: Int
   id: ID!
@@ -166,18 +166,18 @@ input FloatOperator {
 }
 
 input Graphqlsample_MyOrderItem_CreateInput {
-  ParentOrder: ID
+  
   ParentOrderId: ID
-  ParentProduct: ID
+  
   ParentProductId: ID
   Quantity: Int
 }
 
 input Graphqlsample_MyOrderItem_FilterInput {
-  ParentOrder: IDOperator
-  ParentOrderId: StringOperator
-  ParentProduct: IDOperator
-  ParentProductId: StringOperator
+  
+  ParentOrderId: IDOperator
+  
+  ParentProductId: IDOperator
   Quantity: IntOperator
   and: [Graphqlsample_MyOrderItem_FilterInput]
   id: IDOperator
@@ -186,18 +186,18 @@ input Graphqlsample_MyOrderItem_FilterInput {
 }
 
 input Graphqlsample_MyOrderItem_OrderByInput {
-  ParentOrder: OrderByClause
+  
   ParentOrderId: OrderByClause
-  ParentProduct: OrderByClause
+  
   ParentProductId: OrderByClause
   Quantity: OrderByClause
   id: OrderByClause
 }
 
 input Graphqlsample_MyOrderItem_UpdateInput {
-  ParentOrder: ID
+  
   ParentOrderId: ID
-  ParentProduct: ID
+  
   ParentProductId: ID
   Quantity: Int
   id: ID!
